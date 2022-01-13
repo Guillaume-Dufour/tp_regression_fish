@@ -1,0 +1,167 @@
+---
+title: "TP Techniques de régression et de scoring"
+author: "DUFOUR Guillaume"
+date: "14/01/2022"
+output: 
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+Question : Peut-on prédire si les poissons appartiennent à l'espèce étudiée en fonction de leur mensuration ?\
+\
+J'ai choisi de réaliser le TP à l'aide du langage R car c'est le langage que nous avons vu en cours lors des TPs.
+
+# Import des librairies
+```{r}
+library(ggplot2)
+library(ggcorrplot)
+library(GGally)
+library(caret)
+library(pROC)
+```
+
+# Récupération du dataset
+On récupère les données via un jeu de données au format CSV.
+```{r}
+fishes = read.table("./Fish.csv", header = TRUE, sep = ";")
+```
+
+# Exploration des données du dataset
+
+```{r}
+str(fishes)
+head(fishes)
+summary(fishes)
+```
+A l'aide de ces trois commandes, on peut avoir un rapide aperçu de la forme des données. On peut y voir le nombre d'observations (111) ainsi que des valeurs pour chaque colonne.\
+Ensuite, la commande head nous permet d'afficher quelques lignes du dataset (ici 6) ce qui nous permet de voir à quoi ressemble le dataset.\
+La fonction "summary" nous donne quelques chiffres sur les variables comme la moyenne mais également l'étendue des données, ce qui est intéressant à voir pour "Height", "Width" et "Weight".\
+
+# Effectif des groupes
+```{r}
+#Graphique affichant les effectifs des espèces
+ggplot(fishes, aes(x = as.factor(Species))) +
+  geom_bar(aes(fill = as.factor(Species))) + 
+  xlab("Espèces") + 
+  ylab("Effectif") + 
+  labs(fill = "Espèces") +
+  theme_bw() + 
+  scale_color_manual(values = c("#E63946", "#457B9D")) + 
+  ggtitle("Effectif des espèces")
+```
+Sur ce graphique, on peut voir les effectifs de chaque espèce. On veut voir qu'il y a très légèrement plus de poissons de l'espèce 1.
+
+# Analyse des données
+
+```{r}
+#Graphique de corrélation des variables
+ggcorrplot(cor(fishes), outline.col = NA, lab = TRUE)
+```
+A l'aide de ce graphique, nous pouvons voir que certaines variables sont très fortement corrélées ("Width" et "Weight" à 95 %).\
+"Height" et "Weight" sont également corrélées (à 84 %).\
+Ces corrélations semblent logiques puisque le poids très souvent relié à la taille (à la largeur ou à la hauteur).\
+
+# Modèle de régression
+
+Lors de cette étape, on sépare les données en deux échantillons :\
+  - un est utilisé pour l'apprentissage du modèle\
+  - le second est un échantillon utilisé pour tester les performances en prédiction du modèle (ainsi que sa capacité de généralisation)\
+\
+On sépare les échantillons comme cela : 80 % pour l'échantillon d'apprentissage et 20 % pour l'échantillon de test.
+
+```{r}
+#Taille de l'échantillon
+n <- nrow(fishes)
+
+#Indices des individus de l'échantillon d'apprentissage
+train_index <- sample(x = 1:n, size = round(0.8 * n), replace = FALSE)
+
+#Création des deux échantillons sous forme de dataset
+train_data <- fishes[train_index,]
+test_data <- fishes[-train_index,]
+```
+
+# Training du modèle
+On va ensuite chercher à prédire l'espèce du poisson étudié.\
+\
+On commence par réaliser une régression backward.\
+On va tenter d'améliorer notre modèle en partant du modèle complet et à chaque étape, une variable du modèle sera enlevé pour trouver un modèle réduit qui représentera le mieux les données.
+```{r}
+#Training du modèle
+log_reg_backward <- glm(Species ~ ., data = train_data, family = "binomial")
+
+#Selection du modèle
+log_reg_backward <- step(log_reg_backward, direction = "backward")
+
+summary(log_reg_backward)
+
+hat_pi_backward <- predict(log_reg_backward, newdata = test_data, type = "response")
+hat_y_backward <- as.integer(hat_pi_backward > 0.5)
+
+table(hat_y_backward, test_data$Species)
+
+```
+
+Nous allons ensuite réaliser une régression forward.\
+A l'inverse de la régression backward, on part d'un modèle vide et on va y ajouter les variables étape par étape jusqu'à obtenir un modèle qui représentera le mieux les données.
+
+```{r}
+#Training du modèle
+log_reg_forward <- glm(Species ~ 1, data = train_data, family = "binomial")
+
+#Sélection du modèle
+log_reg_forward_sel <- step(
+  log_reg_forward,
+  direction = "forward",
+  scope = list(lower=log_reg_forward, upper=~Weight+Height+Width)
+)
+
+summary(log_reg_forward_sel)
+
+hat_pi_forward <- predict(log_reg_forward_sel, newdata = test_data, type = "response")
+hat_y_forward <- as.integer(hat_pi_forward > 0.5)
+
+result <- table(hat_y_forward, test_data$Species)
+
+result
+
+#Calcul de l'accuracy
+accuracy <- round((result[1] + result[4]) / sum(result), 4)
+```
+
+Nous voyons que dans les régressions backward et forward donnent les mêmes résultat. Dans les deux cas, le modèle est optimal lorsque les variables "Height" et "Weight" sont sélectionnées.\
+Nous allons donc réaliser une matrice de confusion avec une des deux sélections (forward choisi de manière arbitraire).
+
+# Matrice de confusion
+```{r}
+#Matrice de confusion
+confusionMatrix(
+  data = as.factor(hat_y_forward), 
+  reference = as.factor(test_data$Species), 
+  positive = "1"
+)
+```
+
+Avec le modèle réalisé, on obtient une accuracy égale à `r accuracy`, ce qui est une bonne valeur (car celle-ci est proche de 1).
+
+A l'aide de cette matrice de confusion, on obtient différentes informations :\
+  - le nombre de vrai positif (prédit égal à 1 et réellement égal à 1) : `r result[4]` dans notre modèle\
+  - le nombre de vrai négatif (prédit égal à 0 et réellement égal à 0) : `r result[1]` dans notre modèle\
+  - le nombre de faux positif (prédit égal à 1 et réellement égal à 0) : `r result[2]` dans notre modèle\
+  - le nombre de faux négatif (prédit égal à 0 et réellement égal à 1) : `r result[3]` dans notre modèle\
+  
+On remarque que le modèle semble être performant car le ratio de positif est très correct et qu'on compte peu de négatif.
+
+```{r}
+#Calcul de l'AUC
+auc(test_data$Species, hat_pi_forward)
+```
+AUC proche de 1 nous montre que nous avons un bon modèle. Il aurait été préférable d'avoir un échantillon de données plus important , ce qui nous permettrait d'avoir un échantillon de test plus important. En effet, avec la répartition choisie pour les datasets de train et de test (80 - 20 respectivement), l'échantillon de test peut être considéré comme petit. Modifier cette répartition permettrait d'avoir un échantillon de test avec plus de données mais l'accuracy serait moins bonne (environ 0.85 avec une répartition de 70 - 30).
+
+# Conclusion
+
+Durant ce TP, nous avons réussi à trouver un modèle assez performant permettant de déterminer l'espèce de nouveaux poissons en fonction de deux variables : le poids et leur taille (Width). Pour cela, nous avons utilisé un modèle de régression logistique. A cause du faible jeu de données, la performance du modèle varie et donc la précision n'est pas forcément stable.
